@@ -1,11 +1,9 @@
 """Byte-level charset validation and statistics for the Python detector."""
 
-from std.algorithm import parallelize
 from std.sys import simd_width_of
 
 comptime BPtr = UnsafePointer[UInt8, AnyOrigin[mut=True]]
 comptime IPtr = UnsafePointer[Int64, AnyOrigin[mut=True]]
-comptime PARALLEL_THRESHOLD = 262144
 
 
 def utf8_scan(src: BPtr, n: Int, stats: IPtr):
@@ -265,38 +263,37 @@ def chd_scan(
     stats[0] = Int64(n)
 
     i = 0
-    if n >= PARALLEL_THRESHOLD:
-        while i + W <= n:
-            var values = src.load[width=W](i)
-            stats[1] += values.ge(
-                SIMD[DType.uint8, W](0x80)
-            ).cast[DType.int64]().reduce_add()
-            stats[2] += values.eq(
-                SIMD[DType.uint8, W](0)
-            ).cast[DType.int64]().reduce_add()
-            var controls = (
-                values.lt(SIMD[DType.uint8, W](0x20))
-                & values.ne(SIMD[DType.uint8, W](9))
-                & values.ne(SIMD[DType.uint8, W](10))
-                & values.ne(SIMD[DType.uint8, W](12))
-                & values.ne(SIMD[DType.uint8, W](13))
-                & values.ne(SIMD[DType.uint8, W](0))
-            )
-            stats[3] += controls.cast[DType.int64]().reduce_add()
-            stats[4] += (
-                values.ge(SIMD[DType.uint8, W](0x80))
-                & values.le(SIMD[DType.uint8, W](0x9F))
-            ).cast[DType.int64]().reduce_add()
-            stats[5] += (
-                values.ge(SIMD[DType.uint8, W](0x20))
-                & values.le(SIMD[DType.uint8, W](0x7E))
-            ).cast[DType.int64]().reduce_add()
-            comptime for lane in range(W):
-                var b = Int(values[lane])
-                hist[b] += 1
-                if b == 0:
-                    stats[6 + (i + lane) % 4] += 1
-            i += W
+    while i + W <= n:
+        var values = src.load[width=W](i)
+        stats[1] += values.ge(
+            SIMD[DType.uint8, W](0x80)
+        ).cast[DType.int64]().reduce_add()
+        stats[2] += values.eq(
+            SIMD[DType.uint8, W](0)
+        ).cast[DType.int64]().reduce_add()
+        var controls = (
+            values.lt(SIMD[DType.uint8, W](0x20))
+            & values.ne(SIMD[DType.uint8, W](9))
+            & values.ne(SIMD[DType.uint8, W](10))
+            & values.ne(SIMD[DType.uint8, W](12))
+            & values.ne(SIMD[DType.uint8, W](13))
+            & values.ne(SIMD[DType.uint8, W](0))
+        )
+        stats[3] += controls.cast[DType.int64]().reduce_add()
+        stats[4] += (
+            values.ge(SIMD[DType.uint8, W](0x80))
+            & values.le(SIMD[DType.uint8, W](0x9F))
+        ).cast[DType.int64]().reduce_add()
+        stats[5] += (
+            values.ge(SIMD[DType.uint8, W](0x20))
+            & values.le(SIMD[DType.uint8, W](0x7E))
+        ).cast[DType.int64]().reduce_add()
+        comptime for lane in range(Int(W)):
+            var b = Int(values[lane])
+            hist[b] += 1
+            if b == 0:
+                stats[6 + (i + lane) % 4] += 1
+        i += W
     while i < n:
         var b = Int(src[i])
         hist[b] += 1
@@ -313,24 +310,10 @@ def chd_scan(
             stats[5] += 1
         i += 1
 
-    @parameter
-    def validate(task: Int):
-        if task == 0:
-            utf8_scan(src, n, stats)
-        elif task == 1:
-            sjis_scan(src, n, stats)
-        elif task == 2:
-            eucjp_scan(src, n, stats)
-        elif task == 3:
-            gb18030_scan(src, n, stats)
-        elif task == 4:
-            big5_scan(src, n, stats)
-        else:
-            korean_scan(src, n, stats)
-
-    if n >= PARALLEL_THRESHOLD:
-        parallelize[validate](6, 6)
-    else:
-        for task in range(6):
-            validate(task)
+    utf8_scan(src, n, stats)
+    sjis_scan(src, n, stats)
+    eucjp_scan(src, n, stats)
+    gb18030_scan(src, n, stats)
+    big5_scan(src, n, stats)
+    korean_scan(src, n, stats)
     return 0
