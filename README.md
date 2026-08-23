@@ -67,8 +67,8 @@ byte/control/null statistics, strict UTF-8 validation, zero-position analysis
 for UTF-16/32, and independent finite-state scans for the covered East Asian
 multibyte families. Single-byte candidates are ranked from the native
 histogram and a bounded language-bigram sample. Large scans use SIMD byte
-classification with a scalar remainder and can run independent validators in
-parallel.
+classification with a scalar remainder. The finite-state validators remain
+serial because each byte determines the position and state of the next step.
 
 The Python wrapper calls one C ABI export through `ctypes`. Buffers cross the
 ABI as integer addresses. Mojo reconstructs typed pointers and writes into
@@ -78,7 +78,11 @@ the call. The native function rejects null addresses and negative lengths,
 allocates no per-call data buffers, and retains no pointers. Full input `bytes`
 and `bytearray` objects remain zero-copy through the NumPy/FFI boundary.
 
-There is no GPU path.
+There is no GPU path. Detection is dominated by byte classification, histogram
+updates, and branch-heavy finite-state scans, all well below the roughly two
+flops per byte needed to justify transfer and launch overhead. The benchmarked
+CPU implementation is already more than 5x faster than upstream on every
+workload, so neither GPU dispatch nor CPU thread-launch overhead is warranted.
 
 ## Benchmarks
 
@@ -93,12 +97,12 @@ Python 3.13.14, chardet 7.4.3.
 
 | Workload | mojo-chardet | chardet | Speedup |
 |---|---:|---:|---:|
-| detect ASCII, full 5 MiB | 52.49 ms | 569.75 ms | 10.86x |
-| detect UTF-8, default 200 kB | 1.42 ms | 51.93 ms | 36.64x |
-| detect UTF-8, full 5 MiB | 46.53 ms | 826.43 ms | 17.76x |
-| detect Windows-1251, full 2 MiB | 21.19 ms | 186.79 ms | 8.82x |
-| detect cp932, full 2 MiB | 78.45 ms | 1465.88 ms | 18.69x |
-| detect_all Windows-1251, 2 MiB | 22.00 ms | 109.53 ms | 4.98x |
+| detect ASCII, full 5 MiB | 57.44 ms | 400.55 ms | 6.97x |
+| detect UTF-8, default 200 kB | 1.21 ms | 33.35 ms | 27.59x |
+| detect UTF-8, full 5 MiB | 28.85 ms | 788.42 ms | 27.33x |
+| detect Windows-1251, full 2 MiB | 9.56 ms | 104.36 ms | 10.91x |
+| detect cp932, full 2 MiB | 73.02 ms | 1432.04 ms | 19.61x |
+| detect_all Windows-1251, 2 MiB | 10.00 ms | 106.41 ms | 10.64x |
 
 Results are specific to this machine and workload; run `pixi run bench` to
 measure your system.
