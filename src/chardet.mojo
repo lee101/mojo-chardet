@@ -264,7 +264,7 @@ def chd_scan(
 
     i = 0
     while i + W <= n:
-        var values = src.load[width=W](i)
+        var values = src.unsafe_load[width=W](i)
         stats[1] += values.ge(
             SIMD[DType.uint8, W](0x80)
         ).cast[DType.int64]().reduce_add()
