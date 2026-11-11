@@ -78,11 +78,24 @@ the call. The native function rejects null addresses and negative lengths,
 allocates no per-call data buffers, and retains no pointers. Full input `bytes`
 and `bytearray` objects remain zero-copy through the NumPy/FFI boundary.
 
-There is no GPU path. Detection is dominated by byte classification, histogram
-updates, and branch-heavy finite-state scans, all well below the roughly two
-flops per byte needed to justify transfer and launch overhead. The benchmarked
-CPU implementation is already more than 5x faster than upstream on every
-workload, so neither GPU dispatch nor CPU thread-launch overhead is warranted.
+There is no GPU path. The scan was evaluated against the GPU gate rather than
+dismissed: it is above the roughly 2 flops per byte needed to justify transfer
+(`bench/analysis.md` estimates roughly 59 executed instructions per byte, about
+30x the gate), so the kernel is compute-bound, not memory-bound. It is still CPU
+only, because the cost that does not scale with GPU width is per call:
+
+- `detect()` is stateless and single-shot, so every call would start a device
+  context and synchronise at least twice (a faithful port needs the statistics,
+  validator and reduction kernels in sequence), with no streaming API to
+  amortise a device across buffers;
+- at the default inspection cap of 200 kB the whole native scan takes about
+  1.05 ms on this machine, so a GPU win there would need several serial
+  launches plus a context start to pay for themselves in under a millisecond;
+- the 2-5 MiB bench sizes, where an optimised kernel could beat the CPU, are
+  only reached by explicit `max_bytes=` callers, not by the default path.
+
+GPU launch overhead dominates at the sizes real callers pass, so the CPU path
+is the implementation.
 
 ## Benchmarks
 
@@ -106,3 +119,23 @@ Python 3.13.14, chardet 7.4.3.
 
 Results are specific to this machine and workload; run `pixi run bench` to
 measure your system.
+
+## Acceleration analysis
+
+No GPU kernel was added in this phase, so there is no before/after timing pair
+to report. The numbers that decided it were measured on the machine above and
+are recorded in `bench/analysis.md`:
+
+| Workload | Bytes | detect (median) | detect (best) | Throughput |
+|---|---:|---:|---:|---:|
+| ASCII | 5242914 | 39.91 ms | 37.50 ms | 131 MB/s |
+| UTF-8 | 5242897 | 30.29 ms | 28.27 ms | 173 MB/s |
+| cp932 | 2097168 | 69.79 ms | 68.39 ms | 30 MB/s |
+| Windows-1251 | 2097154 | 11.42 ms | 11.01 ms | 184 MB/s |
+| UTF-8, default cap | 200000 | 1.065 ms | 1.030 ms | 188 MB/s |
+
+These are single calls through the CPU path that ships; nothing in this phase
+changed them. They are recorded only so a later GPU attempt has a real
+baseline to beat. The native scan is essentially all of this time: the Python
+policy layer adds under 0.1 ms at these sizes. The isolated scan (no stats and
+histogram array allocation per call) runs at 162-328 MB/s on a 200 kB buffer.
